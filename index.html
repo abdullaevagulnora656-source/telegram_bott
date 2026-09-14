@@ -26,7 +26,6 @@
     const getLSmod = (k) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch(e) { return null; } };
     const fireRefresh = () => { if (typeof window.fullRefresh === 'function') window.fullRefresh(); };
 
-    // ✅ Timestamp solishtirish: faqat yangiroq ma'lumotni qabul qilamiz
     function acceptRemote(key, remote) {
         if (remote === null || remote === undefined) return false;
         if (typeof remote !== 'object') return true;
@@ -78,6 +77,11 @@
         Object.keys(data).forEach(cls => setLS(`date_swaps_${cls}`, data[cls]));
         fireRefresh();
     });
+    onValue(ref(db, 'weekday_swaps/'), (snap) => {
+        const data = snap.val(); if (!data) return;
+        Object.keys(data).forEach(cls => setLS(`weekday_swaps_${cls}`, data[cls]));
+        fireRefresh();
+    });
     onValue(ref(db, 'groups_data/'), (snap) => {
         const data = snap.val(); if (!data) return;
         Object.keys(data).forEach(cls => {
@@ -111,6 +115,7 @@
     window.syncGroupsToFirebase      = (cls, sub, data) => set(ref(db, `groups_data/${cls}/${sub}`), data).catch(e=>console.error(e));
     window.syncClassSubsToFirebase   = (cls, data) => set(ref(db, `class_subs/${cls}`), data).catch(e=>console.error(e));
     window.syncDateSwapsToFirebase   = (cls, data) => set(ref(db, `date_swaps/${cls}`), data).catch(e=>console.error(e));
+    window.syncWeekdaySwapsToFirebase = (cls, data) => set(ref(db, `weekday_swaps/${cls}`), data).catch(e=>console.error(e));
     window.syncLockSettingsToFirebase = (data) => set(ref(db, 'lock_settings/'), data).catch(e=>console.error(e));
     window.syncDateTeachersToFirebase = (data) => set(ref(db, 'date_teachers/'), data).catch(e=>console.error(e));
     window.syncClassesListToFirebase  = (data) => set(ref(db, 'classes_list/'), data).catch(e=>console.error(e));
@@ -174,6 +179,12 @@
     .subject-teacher-tag { font-size: 11px; background: #f1f5f9; padding: 1px 8px; border-radius: 12px; color: #1e293b; display: inline-block; margin-top: 2px; }
     .save-indicator { position: fixed; bottom: 20px; right: 20px; background: #10b981; color: white; padding: 8px 16px; border-radius: 30px; font-size: 12px; font-weight: 600; opacity: 0; transition: opacity 0.3s; z-index: 999; }
     .save-indicator.show { opacity: 1; }
+    .reorder-item { display: flex; align-items: center; gap: 10px; background: #f8fafc; padding: 10px; border-radius: 8px; border-left: 4px solid var(--p); margin-bottom: 8px; }
+    .reorder-item .num { font-weight: bold; color: var(--p); min-width: 30px; }
+    .reorder-item .nm { flex: 1; font-weight: 600; }
+    .reorder-item .tch { font-size: 12px; color: #64748b; margin-right: 10px; }
+    .reorder-item .mv { padding: 4px 10px; border-radius: 6px; border: none; cursor: pointer; background: white; font-weight: bold; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .reorder-item .mv:disabled { opacity: 0.3; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -360,6 +371,33 @@
                     </div>
                 </div>
 
+                <!-- 🔀 KUNLIK FANLAR TARTIBI (REORDER) -->
+                <div style="background:#fff7ed; border:1px solid #fed7aa; padding:15px; border-radius:10px; margin-bottom:20px;">
+                    <h3 style="margin-top:0; color:#9a3412;">🔀 Kunlik fanlar tartibini o'zgartirish</h3>
+                    <p style="font-size:12px; color:#78350f; margin-top:0;">Sinf va sanani tanlang. Tartibni <b>faqat shu kun</b> uchun yoki <b>shu hafta kuni</b> uchun (haftaning barcha bir xil kunlari) o'zgartirish mumkin.</p>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+                        <select id="reorder-class-select" class="gi" style="width:110px; height:38px;" onchange="onReorderClassChange()"></select>
+                        <input type="date" id="reorder-date" class="gi" style="width:170px; height:38px;" onchange="onReorderDateChange()">
+                        <span id="reorder-weekday-label" style="font-weight:600; color:var(--p);"></span>
+                    </div>
+                    <div style="background:white; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:10px;">
+                        <label style="font-weight:bold; display:block; margin-bottom:8px; font-size:13px;">Qo'llanish doirasi:</label>
+                        <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; cursor:pointer; font-size:14px;">
+                            <input type="radio" name="reorder-scope" value="daily" checked onchange="onReorderScopeChange()">
+                            <span><b>Faqat shu kun</b> uchun (bir marta)</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:14px;">
+                            <input type="radio" name="reorder-scope" value="weekly" onchange="onReorderScopeChange()">
+                            <span><b>Shu hafta kuni</b> uchun (barcha <span id="reorder-weekday-name" style="color:var(--p); font-weight:bold;">...</span> kunlari)</span>
+                        </label>
+                    </div>
+                    <div id="reorder-lessons-list" style="max-height:400px; overflow-y:auto; padding:10px; background:white; border:1px solid #e2e8f0; border-radius:8px;"></div>
+                    <div style="margin-top:12px; display:flex; gap:10px; justify-content:flex-end;">
+                        <button class="tab-btn" style="background:#64748b; color:white; border:none;" onclick="resetReorder()">↺ Tiklash</button>
+                        <button class="tab-btn" style="background:#10b981; color:white; border:none;" onclick="saveReorder()">💾 Saqlash</button>
+                    </div>
+                </div>
+
                 <div style="background:#f1f5f9; border:1px solid #cbd5e1; padding:15px; border-radius:10px; margin-bottom:20px;">
                     <h3 style="margin-top:0; color:#1e293b;">🔒 Qulflash va maxsus ustozlar</h3>
                     <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
@@ -412,6 +450,7 @@
         weeklyLayout = localStorage.getItem('weekly_layout') || 'vertical';
 
     const mon = ['Yan','Fev','Mar','Apr','May','Iyun','Iyul','Avg','Sep','Okt','Noy','Dek'];
+    const weekdayNames = ['Yakshanba','Dushanba','Seshanba','Chorshanba','Payshanba','Juma','Shanba'];
     const getTodayStr = () => `${new Date().getDate()}-${mon[new Date().getMonth()]}`;
 
     function hEsc(s) {
@@ -519,7 +558,7 @@
         classes.forEach(c => sel.add(new Option(c + "-sinf", c)));
         if (old && classes.includes(old)) sel.value = old;
 
-        ['admin-class-teacher-select','admin-class-select','move-target-class-select','lock-class-select','swap-class-select'].forEach(id => {
+        ['admin-class-teacher-select','admin-class-select','move-target-class-select','lock-class-select','swap-class-select','reorder-class-select'].forEach(id => {
             const s = document.getElementById(id);
             if (s) {
                 const o = s.value;
@@ -738,9 +777,8 @@
         return checkAccess(subObj?.teacher);
     }
 
-    function getLessonsForDate(cls, dateValStr) {
+    function buildBaseLessons(cls, dateValStr) {
         const dt = new Date(dateValStr);
-        const dateStr = `${dt.getDate()}-${mon[dt.getMonth()]}`;
         const classSubs = getClassSubjects(cls);
         const curDay = dt.getDay();
         let lessons = [];
@@ -750,14 +788,34 @@
                 for (let i=0; i<cnt; i++) lessons.push({ ...s, lessonIndex: i });
             }
         });
-        const swaps = lsGet(`date_swaps_${cls}`, {})[dateStr];
-        if (swaps && Array.isArray(swaps)) {
-            swaps.forEach(sw => {
-                if (lessons[sw.i1] && lessons[sw.i2]) {
-                    const t = lessons[sw.i1]; lessons[sw.i1] = lessons[sw.i2]; lessons[sw.i2] = t;
-                }
-            });
-        }
+        return lessons;
+    }
+
+    function applyWeeklySwaps(cls, weekday, lessons) {
+        const weeklySwaps = lsGet(`weekday_swaps_${cls}`, {})[weekday] || [];
+        weeklySwaps.forEach(sw => {
+            if (lessons[sw.i1] && lessons[sw.i2]) {
+                const t = lessons[sw.i1]; lessons[sw.i1] = lessons[sw.i2]; lessons[sw.i2] = t;
+            }
+        });
+    }
+
+    function applyDailySwaps(cls, dateStr, lessons) {
+        const dailySwaps = lsGet(`date_swaps_${cls}`, {})[dateStr] || [];
+        dailySwaps.forEach(sw => {
+            if (lessons[sw.i1] && lessons[sw.i2]) {
+                const t = lessons[sw.i1]; lessons[sw.i1] = lessons[sw.i2]; lessons[sw.i2] = t;
+            }
+        });
+    }
+
+    function getLessonsForDate(cls, dateValStr) {
+        const dt = new Date(dateValStr);
+        const dateStr = `${dt.getDate()}-${mon[dt.getMonth()]}`;
+        const curDay = dt.getDay();
+        let lessons = buildBaseLessons(cls, dateValStr);
+        applyWeeklySwaps(cls, curDay, lessons);
+        applyDailySwaps(cls, dateStr, lessons);
         return lessons;
     }
 
@@ -896,7 +954,6 @@
         return res;
     }
 
-    // ✅ BAHO SAQLASH: butun fan obyektini __ts bilan saqlaymiz
     window.saveM = function(q, cls, sub, displayIdx, dIdx, val) {
         const names = getSortedStudents(cls);
         const studentName = names[displayIdx];
@@ -1019,7 +1076,6 @@
 
     function closeReport() { document.getElementById('report-modal').style.display = 'none'; }
 
-    // ✅ MAVZULAR: __ts bilan saqlash
     window.renderPlans = function() {
         const cls = document.getElementById('c-select').value;
         const sub = document.getElementById('s-select').value;
@@ -1079,6 +1135,170 @@
         window.renderPlans();
     };
 
+    // ==================== 🔀 TARTIB (REORDER) - SOZLAMALAR ICHIDA ====================
+    let reorderState = { cls: '', dateVal: '', weekday: 0, baseLessons: [], currentOrder: [], weeklyApplied: [] };
+
+    function initReorderInSettings() {
+        const sel = document.getElementById('reorder-class-select');
+        if (!sel) return;
+        const curClass = document.getElementById('c-select')?.value;
+        if (curClass && Array.from(sel.options).some(o => o.value === curClass)) {
+            sel.value = curClass;
+        } else if (sel.options.length > 0) {
+            sel.selectedIndex = 0;
+        }
+        const dateInput = document.getElementById('reorder-date');
+        const mainDate = document.getElementById('date-pick')?.value;
+        dateInput.value = mainDate || new Date().toISOString().slice(0,10);
+        document.querySelector('input[name="reorder-scope"][value="daily"]').checked = true;
+        onReorderDateChange();
+    }
+
+    window.onReorderClassChange = function() { onReorderDateChange(); };
+
+    window.onReorderDateChange = function() {
+        const cls = document.getElementById('reorder-class-select').value;
+        const dateVal = document.getElementById('reorder-date').value;
+        if (!cls || !dateVal) return;
+        reorderState.cls = cls;
+        reorderState.dateVal = dateVal;
+        const dt = new Date(dateVal);
+        reorderState.weekday = dt.getDay();
+        document.getElementById('reorder-weekday-label').textContent = `(${weekdayNames[dt.getDay()]})`;
+        document.getElementById('reorder-weekday-name').textContent = weekdayNames[dt.getDay()];
+        reorderState.baseLessons = buildBaseLessons(cls, dateVal);
+        initReorderOrder();
+        renderReorderLessons();
+    };
+
+    function initReorderOrder() {
+        const cls = reorderState.cls;
+        const dateVal = reorderState.dateVal;
+        if (!dateVal) return;
+        const dt = new Date(dateVal);
+        const dateStr = `${dt.getDate()}-${mon[dt.getMonth()]}`;
+        const n = reorderState.baseLessons.length;
+        const scope = document.querySelector('input[name="reorder-scope"]:checked').value;
+
+        let order = [...Array(n).keys()];
+        const weeklySwaps = lsGet(`weekday_swaps_${cls}`, {})[dt.getDay()] || [];
+        weeklySwaps.forEach(sw => {
+            if (order[sw.i1] !== undefined && order[sw.i2] !== undefined) {
+                [order[sw.i1], order[sw.i2]] = [order[sw.i2], order[sw.i1]];
+            }
+        });
+        reorderState.weeklyApplied = [...order];
+
+        if (scope === 'daily') {
+            const dailySwaps = lsGet(`date_swaps_${cls}`, {})[dateStr] || [];
+            dailySwaps.forEach(sw => {
+                if (order[sw.i1] !== undefined && order[sw.i2] !== undefined) {
+                    [order[sw.i1], order[sw.i2]] = [order[sw.i2], order[sw.i1]];
+                }
+            });
+        }
+        reorderState.currentOrder = order;
+    }
+
+    window.onReorderScopeChange = function() {
+        initReorderOrder();
+        renderReorderLessons();
+    };
+
+    function computeSwapsFromState(startState, targetOrder) {
+        const arr = [...startState];
+        const swaps = [];
+        for (let i = 0; i < arr.length; i++) {
+            if (arr[i] !== targetOrder[i]) {
+                let j = arr.indexOf(targetOrder[i]);
+                while (j > i) {
+                    swaps.push({ i1: j - 1, i2: j });
+                    [arr[j-1], arr[j]] = [arr[j], arr[j-1]];
+                    j--;
+                }
+            }
+        }
+        return swaps;
+    }
+
+    window.renderReorderLessons = function() {
+        const area = document.getElementById('reorder-lessons-list');
+        if (!area) return;
+        const lessons = reorderState.baseLessons;
+        const order = reorderState.currentOrder;
+        if (!lessons || lessons.length === 0) {
+            area.innerHTML = '<p style="text-align:center; color:#65676b; padding:20px;">Bu sanada dars yo\'q.</p>';
+            return;
+        }
+        let html = '';
+        order.forEach((origIdx, pos) => {
+            const l = lessons[origIdx];
+            html += `<div class="reorder-item">
+                <div class="num">${pos+1}.</div>
+                <div class="nm">${hEsc(l.name)}</div>
+                <div class="tch">${hEsc(l.teacher||'')}</div>
+                <button class="mv" onclick="moveReorder(${pos}, -1)" ${pos===0?'disabled':''}>▲</button>
+                <button class="mv" onclick="moveReorder(${pos}, 1)" ${pos===order.length-1?'disabled':''}>▼</button>
+            </div>`;
+        });
+        area.innerHTML = html;
+    };
+
+    window.moveReorder = function(pos, dir) {
+        const order = reorderState.currentOrder;
+        const newPos = pos + dir;
+        if (newPos < 0 || newPos >= order.length) return;
+        [order[pos], order[newPos]] = [order[newPos], order[pos]];
+        renderReorderLessons();
+    };
+
+    window.resetReorder = function() {
+        reorderState.currentOrder = reorderState.baseLessons.map((_, i) => i);
+        renderReorderLessons();
+    };
+
+    window.saveReorder = function() {
+        const scope = document.querySelector('input[name="reorder-scope"]:checked').value;
+        const cls = reorderState.cls;
+        const dateVal = reorderState.dateVal;
+        if (!cls || !dateVal) return alert("Sinf va sanani tanlang!");
+        const dt = new Date(dateVal);
+        const dateStr = `${dt.getDate()}-${mon[dt.getMonth()]}`;
+        const n = reorderState.baseLessons.length;
+        if (n === 0) return alert("Bu sanada dars yo'q!");
+
+        if (scope === 'daily') {
+            const startState = reorderState.weeklyApplied || [...Array(n).keys()];
+            const swaps = computeSwapsFromState(startState, reorderState.currentOrder);
+            const allDaily = lsGet(`date_swaps_${cls}`, {});
+            if (swaps.length === 0) delete allDaily[dateStr];
+            else allDaily[dateStr] = swaps;
+            allDaily.__ts = Date.now();
+            lsSet(`date_swaps_${cls}`, allDaily);
+            window.syncDateSwapsToFirebase(cls, allDaily);
+        } else {
+            const startState = [...Array(n).keys()];
+            const swaps = computeSwapsFromState(startState, reorderState.currentOrder);
+            const allWeekly = lsGet(`weekday_swaps_${cls}`, {});
+            if (swaps.length === 0) delete allWeekly[dt.getDay()];
+            else allWeekly[dt.getDay()] = swaps;
+            allWeekly.__ts = Date.now();
+            lsSet(`weekday_swaps_${cls}`, allWeekly);
+            window.syncWeekdaySwapsToFirebase(cls, allWeekly);
+
+            const allDaily = lsGet(`date_swaps_${cls}`, {});
+            if (allDaily[dateStr]) {
+                delete allDaily[dateStr];
+                allDaily.__ts = Date.now();
+                lsSet(`date_swaps_${cls}`, allDaily);
+                window.syncDateSwapsToFirebase(cls, allDaily);
+            }
+        }
+        showSaved();
+        alert("Tartib saqlandi!");
+    };
+    // ==================== /REORDER ====================
+
     function openSettingsModal() {
         document.getElementById('settings-pass').value = "";
         document.getElementById('pass-section').style.display = 'block';
@@ -1087,6 +1307,7 @@
         window.reloadClassSelects();
         renderClassesList(); renderGradeColorsList();
         loadClassTeacherData(); loadAdminStudentsList(); loadLockSettingsSubSelect();
+        initReorderInSettings();
         document.getElementById('settings-modal').style.display = 'block';
     }
     function closeSettingsModal() {
@@ -1099,6 +1320,7 @@
             document.getElementById('settings-body').style.display = 'block';
             renderClassesList(); renderGradeColorsList();
             loadClassSettingsData(); loadAdminStudentsList(); loadLockSettingsSubSelect();
+            initReorderInSettings();
         } else alert("Parol noto'g'ri!");
     }
 
@@ -1152,6 +1374,8 @@
 
         const osv = localStorage.getItem(`date_swaps_${old}`);
         if (osv) { localStorage.setItem(`date_swaps_${nn}`, osv); localStorage.removeItem(`date_swaps_${old}`); window.syncDateSwapsToFirebase(nn, JSON.parse(osv)); }
+        const owv = localStorage.getItem(`weekday_swaps_${old}`);
+        if (owv) { localStorage.setItem(`weekday_swaps_${nn}`, owv); localStorage.removeItem(`weekday_swaps_${old}`); window.syncWeekdaySwapsToFirebase(nn, JSON.parse(owv)); }
 
         Object.keys(localStorage).forEach(k => {
             if ((k.startsWith('marks_') || k.startsWith('plans_')) && k.includes(`_${old}_`)) {
@@ -1174,7 +1398,7 @@
         const all = lsGet('class_subs_', {}); delete all[n]; lsSet('class_subs_', all);
         localStorage.removeItem(`class_subs_${n}`);
         Object.keys(localStorage).forEach(k => {
-            if (k.startsWith(`groups_${n}_`) || k === `date_swaps_${n}` ||
+            if (k.startsWith(`groups_${n}_`) || k === `date_swaps_${n}` || k === `weekday_swaps_${n}` ||
                 ((k.startsWith('marks_') || k.startsWith('plans_')) && k.includes(`_${n}_`))) {
                 localStorage.removeItem(k);
             }
