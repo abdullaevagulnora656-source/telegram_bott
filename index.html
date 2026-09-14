@@ -185,6 +185,7 @@
     .reorder-item .tch { font-size: 12px; color: #64748b; margin-right: 10px; }
     .reorder-item .mv { padding: 4px 10px; border-radius: 6px; border: none; cursor: pointer; background: white; font-weight: bold; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .reorder-item .mv:disabled { opacity: 0.3; cursor: not-allowed; }
+    .dup-badge { display: inline-block; font-size: 10px; background: #fef3c7; color: #92400e; padding: 1px 6px; border-radius: 8px; margin-left: 6px; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -371,7 +372,6 @@
                     </div>
                 </div>
 
-                <!-- 🔀 KUNLIK FANLAR TARTIBI (REORDER) -->
                 <div style="background:#fff7ed; border:1px solid #fed7aa; padding:15px; border-radius:10px; margin-bottom:20px;">
                     <h3 style="margin-top:0; color:#9a3412;">🔀 Kunlik fanlar tartibini o'zgartirish</h3>
                     <p style="font-size:12px; color:#78350f; margin-top:0;">Sinf va sanani tanlang. Tartibni <b>faqat shu kun</b> uchun yoki <b>shu hafta kuni</b> uchun (haftaning barcha bir xil kunlari) o'zgartirish mumkin.</p>
@@ -755,18 +755,41 @@
         updateClassTeacherDisplay(cls);
     }
 
-    function getSortedStudents(cls) {
+    /* ============ YANGI: Bir xil ismli o'quvchilarni farqlash ============ */
+    // Har bir o'quvchi uchun noyob kalit yaratadi.
+    // Agar ism takrorlanmasa: kalit = ism.
+    // Agar takrorlansa: kalit = "ism__0", "ism__1" (tartib bo'yicha).
+    function getSortedStudentEntries(cls, skipGroupFilter) {
         const sl = getStudentsListObj();
-        let names = (sl[cls] || []).slice();
-        names.sort((a, b) => a.localeCompare(b, 'uz'));
-        const gIdx = document.getElementById('g-select').value;
-        const sub = document.getElementById('s-select').value;
+        const raw = (sl[cls] || []).slice().sort((a, b) => a.localeCompare(b, 'uz'));
+        const totalCounts = {};
+        raw.forEach(n => { totalCounts[n] = (totalCounts[n] || 0) + 1; });
+        const seen = {};
+        const entries = raw.map(n => {
+            const occ = seen[n] || 0;
+            seen[n] = occ + 1;
+            const key = totalCounts[n] > 1 ? `${n}__${occ}` : n;
+            return { name: n, key, isDuplicate: totalCounts[n] > 1, occ };
+        });
+
+        if (skipGroupFilter) return entries;
+
+        const gSel = document.getElementById('g-select');
+        const sSel = document.getElementById('s-select');
+        const gIdx = gSel ? gSel.value : 'all';
+        const sub = sSel ? sSel.value : '';
         if (gIdx !== "all" && gIdx !== "" && sub) {
             const groups = lsGet(`groups_${cls}_${sub}`, []);
             const g = groups[parseInt(gIdx)];
-            if (g && g.students) names = names.filter(n => g.students.includes(n));
+            if (g && g.students) {
+                return entries.filter(e => g.students.includes(e.name));
+            }
         }
-        return names;
+        return entries;
+    }
+
+    function getSortedStudents(cls) {
+        return getSortedStudentEntries(cls).map(e => e.name);
     }
 
     function isAllowedForStudent(cls, subName, subObj, studentName) {
@@ -826,7 +849,7 @@
         const dt = new Date(dateValStr);
         const dateStr = `${dt.getDate()}-${mon[dt.getMonth()]}`;
         const isToday = (dateStr === getTodayStr());
-        const students = getSortedStudents(cls);
+        const entries = getSortedStudentEntries(cls);
         const locks = lsGet('lock_settings', {})[cls] || {};
         const dtT = lsGet('date_teachers', {});
         const lessons = getLessonsForDate(cls, dateValStr);
@@ -840,22 +863,25 @@
         });
         h += `</tr></thead><tbody>`;
 
-        students.forEach((studentName, i) => {
-            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(studentName)}</td>`;
+        entries.forEach((entry, i) => {
+            const studentName = entry.name;
+            const studentKey = entry.key;
+            const dupBadge = entry.isDuplicate ? `<span class="dup-badge">#${entry.occ+1}</span>` : '';
+            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(studentName)}${dupBadge}</td>`;
             lessons.forEach(l => {
                 const dates = generateDates(cls, l.name, activeQuarter);
                 const dIdx = dates.findIndex(d => d.date === dateStr && d.instance === l.lessonIndex);
-                const cellLocked = lockTrue(locks.cells?.[studentName]?.[l.name]?.[activeQuarter]?.[dIdx]);
+                const cellLocked = lockTrue(locks.cells?.[studentKey]?.[l.name]?.[activeQuarter]?.[dIdx]);
                 const dLocked = lockTrue(locks.dates?.[l.name]?.[activeQuarter]?.[dIdx]);
                 const mObj = getMarks(activeQuarter, cls, l.name);
                 const dk = (dIdx !== -1 && dates[dIdx]) ? dateKey(dates[dIdx]) : '';
-                const val = (dk && mObj[studentName]) ? (mObj[studentName][dk] || '') : '';
+                const val = (dk && mObj[studentKey]) ? (mObj[studentKey][dk] || '') : '';
                 const st = dtT[`${cls}_${l.name}_${activeQuarter}_d_${dIdx}`] || '';
                 const hasA = st ? checkAccess(st) : isAllowedForStudent(cls, l.name, l, studentName);
                 const ro = !hasA || dLocked || cellLocked;
                 const styleAttr = ro ? '' : getGradeStyle(val);
                 const hv = val ? 'has-value' : '';
-                h += `<td class="${isToday?'is-today-cell':''}"><input type="text" class="gi ${hv} ${ro?'locked':''}" style="${styleAttr}" value="${hEsc(val)}" ${ro?'disabled':''} onchange="saveM('${jEsc(activeQuarter)}','${jEsc(cls)}','${jEsc(l.name)}',${i},${dIdx},this.value)"></td>`;
+                h += `<td class="${isToday?'is-today-cell':''}"><input type="text" class="gi ${hv} ${ro?'locked':''}" style="${styleAttr}" value="${hEsc(val)}" ${ro?'disabled':''} onchange="saveM('${jEsc(activeQuarter)}','${jEsc(cls)}','${jEsc(l.name)}','${jEsc(studentKey)}',${dIdx},this.value)"></td>`;
             });
             h += `</tr>`;
         });
@@ -866,7 +892,7 @@
         const sub = document.getElementById('s-select').value;
         const classSubs = getClassSubjects(cls);
         const subObj = classSubs.find(s => s.name === sub);
-        const students = getSortedStudents(cls);
+        const entries = getSortedStudentEntries(cls);
         const locks = lsGet('lock_settings', {})[cls] || {};
         const dtT = lsGet('date_teachers', {});
         const dates = generateDates(cls, sub, activeQuarter);
@@ -880,31 +906,34 @@
         });
         h += `<th class="avg-cell">O'RT.</th><th>CHORAK</th></tr></thead><tbody>`;
 
-        students.forEach((studentName, i) => {
+        entries.forEach((entry, i) => {
+            const studentName = entry.name;
+            const studentKey = entry.key;
+            const dupBadge = entry.isDuplicate ? `<span class="dup-badge">#${entry.occ+1}</span>` : '';
             let row = [];
-            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(studentName)}</td>`;
+            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(studentName)}${dupBadge}</td>`;
             dates.forEach((d, idx) => {
                 const dk = dateKey(d);
-                const val = marks[studentName]?.[dk] || '';
+                const val = marks[studentKey]?.[dk] || '';
                 if (val && !isNaN(val)) row.push(parseFloat(val));
                 const dLocked = lockTrue(locks.dates?.[sub]?.[activeQuarter]?.[idx]);
-                const cLocked = lockTrue(locks.cells?.[studentName]?.[sub]?.[activeQuarter]?.[idx]);
+                const cLocked = lockTrue(locks.cells?.[studentKey]?.[sub]?.[activeQuarter]?.[idx]);
                 const st = dtT[`${cls}_${sub}_${activeQuarter}_d_${idx}`] || '';
                 const hasA = st ? checkAccess(st) : isAllowedForStudent(cls, sub, subObj, studentName);
                 const ro = !hasA || dLocked || cLocked;
                 const styleAttr = ro ? '' : getGradeStyle(val);
                 const hv = val ? 'has-value' : '';
-                h += `<td class="${d.date===today?'is-today-cell':''}"><input type="text" class="gi ${hv} ${ro?'locked':''}" style="${styleAttr}" value="${hEsc(val)}" ${ro?'disabled':''} onchange="saveM('${jEsc(activeQuarter)}','${jEsc(cls)}','${jEsc(sub)}',${i},${idx},this.value)"></td>`;
+                h += `<td class="${d.date===today?'is-today-cell':''}"><input type="text" class="gi ${hv} ${ro?'locked':''}" style="${styleAttr}" value="${hEsc(val)}" ${ro?'disabled':''} onchange="saveM('${jEsc(activeQuarter)}','${jEsc(cls)}','${jEsc(sub)}','${jEsc(studentKey)}',${idx},this.value)"></td>`;
             });
             const avg = row.length ? (row.reduce((a,b)=>a+b,0)/row.length).toFixed(1) : '';
-            const qVal = marks[studentName]?.['__quarter'] || '';
-            const qLocked = lockTrue(locks.cells?.[studentName]?.[sub]?.[activeQuarter]?.['__quarter']);
+            const qVal = marks[studentKey]?.['__quarter'] || '';
+            const qLocked = lockTrue(locks.cells?.[studentKey]?.[sub]?.[activeQuarter]?.['__quarter']);
             const qt = dtT[`${cls}_${sub}_${activeQuarter}_quarter`] || dtT[`${cls}_${sub}_quarter`] || '';
             const hasQ = qt ? checkAccess(qt) : isAllowedForStudent(cls, sub, subObj, studentName);
             const roQ = !hasQ || qLocked;
             const qStyle = roQ ? '' : getGradeStyle(qVal);
             const qHv = qVal ? 'has-value' : '';
-            h += `<td class="avg-cell">${avg}</td><td><input type="text" class="gi ${qHv} ${roQ?'locked':''}" style="${qStyle}" value="${hEsc(qVal)}" ${roQ?'disabled':''} onchange="saveMQ('${jEsc(activeQuarter)}','${jEsc(cls)}','${jEsc(sub)}',${i},this.value)"></td></tr>`;
+            h += `<td class="avg-cell">${avg}</td><td><input type="text" class="gi ${qHv} ${roQ?'locked':''}" style="${qStyle}" value="${hEsc(qVal)}" ${roQ?'disabled':''} onchange="saveMQ('${jEsc(activeQuarter)}','${jEsc(cls)}','${jEsc(sub)}','${jEsc(studentKey)}',this.value)"></td></tr>`;
         });
         return h + `</tbody></table>`;
     }
@@ -954,51 +983,48 @@
         return res;
     }
 
-    window.saveM = function(q, cls, sub, displayIdx, dIdx, val) {
-        const names = getSortedStudents(cls);
-        const studentName = names[displayIdx];
-        if (!studentName) return;
+    // ==== SAQLASH: endi studentKey (noyob) bo'yicha saqlanadi ====
+    window.saveM = function(q, cls, sub, studentKey, dIdx, val) {
+        if (!studentKey) return;
         const dates = generateDates(cls, sub, q);
         const d = dates[dIdx];
         if (!d) return;
         const dk = dateKey(d);
         const m = getMarks(q, cls, sub);
-        if (!m[studentName]) m[studentName] = {};
+        if (!m[studentKey]) m[studentKey] = {};
         const v = (val||'').toUpperCase().trim();
-        if (v) m[studentName][dk] = v; else delete m[studentName][dk];
-        if (Object.keys(m[studentName]).length === 0) delete m[studentName];
+        if (v) m[studentKey][dk] = v; else delete m[studentKey][dk];
+        if (Object.keys(m[studentKey]).length === 0) delete m[studentKey];
         saveMarksObj(q, cls, sub, m);
         render();
     };
 
-    window.saveMQ = function(q, cls, sub, displayIdx, val) {
-        const names = getSortedStudents(cls);
-        const studentName = names[displayIdx];
-        if (!studentName) return;
+    window.saveMQ = function(q, cls, sub, studentKey, val) {
+        if (!studentKey) return;
         const m = getMarks(q, cls, sub);
-        if (!m[studentName]) m[studentName] = {};
+        if (!m[studentKey]) m[studentKey] = {};
         const v = (val||'').toUpperCase().trim();
-        if (v) m[studentName]['__quarter'] = v; else delete m[studentName]['__quarter'];
-        if (Object.keys(m[studentName]).length === 0) delete m[studentName];
+        if (v) m[studentKey]['__quarter'] = v; else delete m[studentKey]['__quarter'];
+        if (Object.keys(m[studentKey]).length === 0) delete m[studentKey];
         saveMarksObj(q, cls, sub, m);
         render();
     };
 
-    window.saveExtra = function(cls, sub, type, name, val) {
+    window.saveExtra = function(cls, sub, type, studentKey, val) {
         const key = `marks_${type}_${cls}_${sub}`;
         const m = lsGet(key, {});
         const v = (val||'').toUpperCase().trim();
-        if (v) m[name] = v; else delete m[name];
+        if (v) m[studentKey] = v; else delete m[studentKey];
         m.__ts = Date.now();
         lsSet(key, m);
         window.syncToFirebase(key, m);
         showSaved();
     };
 
-    window.saveY = function(k, name, val) {
+    window.saveY = function(k, studentKey, val) {
         const m = lsGet(k, {});
         const v = (val||'').toUpperCase().trim();
-        if (v) m[name] = v; else delete m[name];
+        if (v) m[studentKey] = v; else delete m[studentKey];
         m.__ts = Date.now();
         lsSet(k, m);
         window.syncToFirebase(k, m);
@@ -1008,28 +1034,31 @@
     window.openReport = function() {
         const cls = document.getElementById('c-select').value;
         const sub = document.getElementById('s-select').value;
-        const students = getSortedStudents(cls);
+        const entries = getSortedStudentEntries(cls);
         const classSubs = getClassSubjects(cls);
         const subObj = classSubs.find(s => s.name === sub);
         const dtT = lsGet('date_teachers', {});
 
         let h = `<table><thead><tr><th>№</th><th class="s-name">O'quvchi</th><th>1-Ch</th><th>2-Ch</th><th>3-Ch</th><th>4-Ch</th><th class="avg-cell">YIL. O'RT.</th><th class="y-col">YILLIK</th></tr></thead><tbody>`;
-        students.forEach((name, i) => {
-            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(name)}</td>`;
+        entries.forEach((entry, i) => {
+            const name = entry.name;
+            const studentKey = entry.key;
+            const dupBadge = entry.isDuplicate ? `<span class="dup-badge">#${entry.occ+1}</span>` : '';
+            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(name)}${dupBadge}</td>`;
             let qv = [];
             ['Q1','Q2','Q3','Q4'].forEach(q => {
-                const val = getMarks(q, cls, sub)[name]?.['__quarter'] || '';
+                const val = getMarks(q, cls, sub)[studentKey]?.['__quarter'] || '';
                 if (val && !isNaN(val)) qv.push(parseFloat(val));
                 const st = getGradeStyle(val);
                 h += `<td><div class="gi" style="line-height:30px; margin:auto; width:auto; padding:0 8px; ${st}">${hEsc(val)}</div></td>`;
             });
             const avg = qv.length ? (qv.reduce((a,b)=>a+b,0)/qv.length).toFixed(1) : '-';
             const yKey = `marks_Annual_${cls}_${sub}`;
-            const yVal = lsGet(yKey, {})[name] || '';
+            const yVal = lsGet(yKey, {})[studentKey] || '';
             const at = dtT[`${cls}_${sub}_annual`] || '';
             const hasA = at ? checkAccess(at) : isAllowedForStudent(cls, sub, subObj, name);
             const yStyle = hasA ? getGradeStyle(yVal) : '';
-            h += `<td class="avg-cell">${avg}</td><td class="y-col"><input type="text" class="gi" style="${yStyle}" value="${hEsc(yVal)}" ${!hasA?'disabled':''} onchange="saveY('${jEsc(yKey)}', this.dataset.n, this.value)" data-n="${hEsc(name)}"></td></tr>`;
+            h += `<td class="avg-cell">${avg}</td><td class="y-col"><input type="text" class="gi" style="${yStyle}" value="${hEsc(yVal)}" ${!hasA?'disabled':''} onchange="saveY('${jEsc(yKey)}', this.dataset.k, this.value)" data-k="${hEsc(studentKey)}"></td></tr>`;
         });
         document.getElementById('report-area').innerHTML = h + `</tbody></table>`;
         document.getElementById('report-title').innerText = `${cls}-sinf | ${sub}`;
@@ -1038,7 +1067,7 @@
 
     window.openTotalReport = function() {
         const cls = document.getElementById('c-select').value;
-        const students = getSortedStudents(cls);
+        const entries = getSortedStudentEntries(cls);
         const subjects = getClassSubjects(cls);
         const dtT = lsGet('date_teachers', {});
 
@@ -1048,14 +1077,17 @@
         subjects.forEach(() => h += `<th>1-Ch</th><th>2-Ch</th><th>3-Ch</th><th>4-Ch</th><th>Imt.</th><th>Nat.</th><th>Yil.</th>`);
         h += `</tr></thead><tbody>`;
 
-        students.forEach((name, i) => {
-            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(name)}</td>`;
+        entries.forEach((entry, i) => {
+            const name = entry.name;
+            const studentKey = entry.key;
+            const dupBadge = entry.isDuplicate ? `<span class="dup-badge">#${entry.occ+1}</span>` : '';
+            h += `<tr><td>${i+1}</td><td class="s-name">${hEsc(name)}${dupBadge}</td>`;
             subjects.forEach(s => {
-                const getQ = q => getMarks(q, cls, s.name)[name]?.['__quarter'] || '';
+                const getQ = q => getMarks(q, cls, s.name)[studentKey]?.['__quarter'] || '';
                 const q1=getQ('Q1'), q2=getQ('Q2'), q3=getQ('Q3'), q4=getQ('Q4');
-                const imt = lsGet(`marks_Imtihon_${cls}_${s.name}`, {})[name] || '';
-                const nat = lsGet(`marks_Natija_${cls}_${s.name}`, {})[name] || '';
-                const yil = lsGet(`marks_Annual_${cls}_${s.name}`, {})[name] || '';
+                const imt = lsGet(`marks_Imtihon_${cls}_${s.name}`, {})[studentKey] || '';
+                const nat = lsGet(`marks_Natija_${cls}_${s.name}`, {})[studentKey] || '';
+                const yil = lsGet(`marks_Annual_${cls}_${s.name}`, {})[studentKey] || '';
                 const et = dtT[`${cls}_${s.name}_exam`] || '';
                 const rt = dtT[`${cls}_${s.name}_result`] || '';
                 const at = dtT[`${cls}_${s.name}_annual`] || '';
@@ -1063,9 +1095,9 @@
                 const hR = rt ? checkAccess(rt) : isAllowedForStudent(cls, s.name, s, name);
                 const hA = at ? checkAccess(at) : isAllowedForStudent(cls, s.name, s, name);
                 h += `<td style="${getGradeStyle(q1)}; padding:8px;">${hEsc(q1)}</td><td style="${getGradeStyle(q2)}; padding:8px;">${hEsc(q2)}</td><td style="${getGradeStyle(q3)}; padding:8px;">${hEsc(q3)}</td><td style="${getGradeStyle(q4)}; padding:8px;">${hEsc(q4)}</td>
-                      <td><input type="text" class="gi" style="${hE?getGradeStyle(imt):''} width:40px" ${!hE?'disabled':''} value="${hEsc(imt)}" onchange="saveExtra('${jEsc(cls)}','${jEsc(s.name)}','Imtihon', this.dataset.n, this.value)" data-n="${hEsc(name)}"></td>
-                      <td><input type="text" class="gi" style="${hR?getGradeStyle(nat):''} width:40px" ${!hR?'disabled':''} value="${hEsc(nat)}" onchange="saveExtra('${jEsc(cls)}','${jEsc(s.name)}','Natija', this.dataset.n, this.value)" data-n="${hEsc(name)}"></td>
-                      <td class="y-col"><input type="text" class="gi" style="${hA?getGradeStyle(yil):''} width:40px" ${!hA?'disabled':''} value="${hEsc(yil)}" onchange="saveY('marks_Annual_${jEsc(cls)}_${jEsc(s.name)}', this.dataset.n, this.value)" data-n="${hEsc(name)}"></td>`;
+                      <td><input type="text" class="gi" style="${hE?getGradeStyle(imt):''} width:40px" ${!hE?'disabled':''} value="${hEsc(imt)}" onchange="saveExtra('${jEsc(cls)}','${jEsc(s.name)}','Imtihon', this.dataset.k, this.value)" data-k="${hEsc(studentKey)}"></td>
+                      <td><input type="text" class="gi" style="${hR?getGradeStyle(nat):''} width:40px" ${!hR?'disabled':''} value="${hEsc(nat)}" onchange="saveExtra('${jEsc(cls)}','${jEsc(s.name)}','Natija', this.dataset.k, this.value)" data-k="${hEsc(studentKey)}"></td>
+                      <td class="y-col"><input type="text" class="gi" style="${hA?getGradeStyle(yil):''} width:40px" ${!hA?'disabled':''} value="${hEsc(yil)}" onchange="saveY('marks_Annual_${jEsc(cls)}_${jEsc(s.name)}', this.dataset.k, this.value)" data-k="${hEsc(studentKey)}"></td>`;
             });
             h += `</tr>`;
         });
@@ -1135,7 +1167,7 @@
         window.renderPlans();
     };
 
-    // ==================== 🔀 TARTIB (REORDER) - SOZLAMALAR ICHIDA ====================
+    /* ==================== TARTIB (REORDER) ==================== */
     let reorderState = { cls: '', dateVal: '', weekday: 0, baseLessons: [], currentOrder: [], weeklyApplied: [] };
 
     function initReorderInSettings() {
@@ -1297,7 +1329,6 @@
         showSaved();
         alert("Tartib saqlandi!");
     };
-    // ==================== /REORDER ====================
 
     function openSettingsModal() {
         document.getElementById('settings-pass').value = "";
@@ -1442,7 +1473,6 @@
         if (!name) return alert("F.I.Sh kiriting!");
         const sl = getStudentsListObj();
         if (!sl[cls]) sl[cls] = [];
-        if (sl[cls].includes(name)) return alert("Bu o'quvchi bor!");
         sl[cls].push(name); saveStudentsListObj(sl);
         inp.value = ''; loadAdminStudentsList(); render();
         alert("Qo'shildi!");
@@ -1456,6 +1486,8 @@
         if (idx === -1) return;
         sl[cls][idx] = newName; saveStudentsListObj(sl);
 
+        // Eslatma: bir xil ismli o'quvchilar uchun marks kalitlari "__" bilan saqlangan,
+        // shuning uchun nom o'zgarganda eski kalitni topish qiyin. Oddiy ismlar uchun ishlaydi.
         Object.keys(localStorage).forEach(k => {
             if ((k.startsWith('marks_') || k.startsWith('plans_')) && k.includes(`_${cls}_`)) {
                 const o = lsGet(k, {});
@@ -1487,14 +1519,25 @@
         if (!confirm(`"${name}" ni o'chirmoqchimisiz?`)) return;
         const sl = getStudentsListObj();
         if (!sl[cls]) return;
-        sl[cls] = sl[cls].filter(n => n !== name);
+        const idx = sl[cls].indexOf(name);
+        sl[cls] = sl[cls].filter((n, i) => i !== idx);
         saveStudentsListObj(sl);
 
+        // Compute unique key that this student had (before deletion)
+        // Since entries are recomputed on the fly, we just remove any key matching name or name__N.
+        const oldEntries = [];
+        const rawAll = (sl[cls] || []).concat([name]).sort((a,b)=>a.localeCompare(b,'uz'));
+        // We don't know exact occ; remove both "name" and "name__*" forms where possible.
         Object.keys(localStorage).forEach(k => {
             if ((k.startsWith('marks_') || k.startsWith('plans_')) && k.includes(`_${cls}_`)) {
                 const o = lsGet(k, {});
-                if (o[name] !== undefined) {
-                    delete o[name]; o.__ts = Date.now(); lsSet(k, o);
+                let changed = false;
+                if (o[name] !== undefined) { delete o[name]; changed = true; }
+                Object.keys(o).forEach(kk => {
+                    if (kk.startsWith(name + '__')) { delete o[kk]; changed = true; }
+                });
+                if (changed) {
+                    o.__ts = Date.now(); lsSet(k, o);
                     if (k.startsWith('marks_')) window.syncToFirebase(k, o);
                     else window.savePlanToFirebase(k, o);
                 }
@@ -1528,18 +1571,22 @@
         if (!sl[newCls]) sl[newCls] = [];
         sl[newCls].push(name); saveStudentsListObj(sl);
 
+        // Oddiy ism kalitini ko'chirish (dup "__" keylar qo'lda ko'chiriladi)
         Object.keys(localStorage).forEach(k => {
             if ((k.startsWith('marks_') || k.startsWith('plans_')) && k.includes(`_${oldCls}_`)) {
                 const o = lsGet(k, {});
+                let moved = false;
+                const nk = k.replace(`_${oldCls}_`, `_${newCls}_`);
+                const no = lsGet(nk, {});
                 if (o[name] !== undefined) {
-                    const nk = k.replace(`_${oldCls}_`, `_${newCls}_`);
-                    const no = lsGet(nk, {});
-                    no[name] = o[name]; no.__ts = Date.now(); lsSet(nk, no);
-                    if (k.startsWith('marks_')) window.syncToFirebase(nk, no);
-                    else window.savePlanToFirebase(nk, no);
-                    delete o[name]; o.__ts = Date.now(); lsSet(k, o);
-                    if (k.startsWith('marks_')) window.syncToFirebase(k, o);
-                    else window.savePlanToFirebase(k, o);
+                    no[name] = o[name]; no.__ts = Date.now();
+                    delete o[name]; o.__ts = Date.now();
+                    moved = true;
+                }
+                if (moved) {
+                    lsSet(nk, no); lsSet(k, o);
+                    if (k.startsWith('marks_')) { window.syncToFirebase(nk, no); window.syncToFirebase(k, o); }
+                    else { window.savePlanToFirebase(nk, no); window.savePlanToFirebase(k, o); }
                 }
             }
         });
@@ -1659,35 +1706,37 @@
         const sub = document.getElementById('lock-sub-select').value;
         const q = document.getElementById('lock-cell-q-select').value;
         if (!cls || !sub) return;
-        const sl = getStudentsListObj();
-        const students = (sl[cls] || []).slice().sort((a,b)=>a.localeCompare(b,'uz'));
+        const entries = getSortedStudentEntries(cls, true); // skip group filter
         const dates = generateDates(cls, sub, q);
         const locks = lsGet('lock_settings', {})[cls] || {};
         const div = document.getElementById('lock-cells-students-list');
         div.innerHTML = '';
-        students.forEach(name => {
+        entries.forEach(entry => {
+            const name = entry.name;
+            const key = entry.key;
+            const dupBadge = entry.isDuplicate ? ` <span class="dup-badge">#${entry.occ+1}</span>` : '';
             const box = document.createElement('div');
             box.style.cssText = 'margin-bottom:8px; border-bottom:1px solid #f1f5f9; padding-bottom:5px;';
-            let html = `<div style="font-size:12px; font-weight:bold; color:#1e293b; margin-bottom:3px;">${hEsc(name)}</div><div style="display:flex; gap:4px; flex-wrap:wrap;">`;
+            let html = `<div style="font-size:12px; font-weight:bold; color:#1e293b; margin-bottom:3px;">${hEsc(name)}${dupBadge}</div><div style="display:flex; gap:4px; flex-wrap:wrap;">`;
             dates.forEach((d, di) => {
-                const chk = lockTrue(locks.cells?.[name]?.[sub]?.[q]?.[di]) ? 'checked' : '';
-                html += `<label style="font-size:10px; background:#f8fafc; border:1px solid #cbd5e1; padding:2px 5px; border-radius:4px; cursor:pointer; display:flex; align-items:center; gap:2px;"><input type="checkbox" ${chk} onchange="toggleCellLock('${jEsc(cls)}','${jEsc(sub)}','${jEsc(q)}', this.dataset.n, ${di}, this.checked)" data-n="${hEsc(name)}"><span>${hEsc(d.date)}(${d.instance+1})</span></label>`;
+                const chk = lockTrue(locks.cells?.[key]?.[sub]?.[q]?.[di]) ? 'checked' : '';
+                html += `<label style="font-size:10px; background:#f8fafc; border:1px solid #cbd5e1; padding:2px 5px; border-radius:4px; cursor:pointer; display:flex; align-items:center; gap:2px;"><input type="checkbox" ${chk} onchange="toggleCellLock('${jEsc(cls)}','${jEsc(sub)}','${jEsc(q)}', this.dataset.k, ${di}, this.checked)" data-k="${hEsc(key)}"><span>${hEsc(d.date)}(${d.instance+1})</span></label>`;
             });
-            const qChk = lockTrue(locks.cells?.[name]?.[sub]?.[q]?.['__quarter']) ? 'checked' : '';
-            html += `<label style="font-size:10px; background:#eef2ff; border:1px solid #4361ee; padding:2px 5px; border-radius:4px; cursor:pointer; display:flex; align-items:center; gap:2px; font-weight:bold; color:#4361ee;"><input type="checkbox" ${qChk} onchange="toggleCellLock('${jEsc(cls)}','${jEsc(sub)}','${jEsc(q)}', this.dataset.n, '__quarter', this.checked)" data-n="${hEsc(name)}"><span>Chorak</span></label>`;
+            const qChk = lockTrue(locks.cells?.[key]?.[sub]?.[q]?.['__quarter']) ? 'checked' : '';
+            html += `<label style="font-size:10px; background:#eef2ff; border:1px solid #4361ee; padding:2px 5px; border-radius:4px; cursor:pointer; display:flex; align-items:center; gap:2px; font-weight:bold; color:#4361ee;"><input type="checkbox" ${qChk} onchange="toggleCellLock('${jEsc(cls)}','${jEsc(sub)}','${jEsc(q)}', this.dataset.k, '__quarter', this.checked)" data-k="${hEsc(key)}"><span>Chorak</span></label>`;
             html += `</div>`;
             box.innerHTML = html;
             div.appendChild(box);
         });
     }
-    function toggleCellLock(cls, sub, q, name, cellIdx, isChecked) {
+    function toggleCellLock(cls, sub, q, studentKey, cellIdx, isChecked) {
         const all = lsGet('lock_settings', {});
         if (!all[cls]) all[cls] = { dates: {}, cells: {} };
         if (!all[cls].cells) all[cls].cells = {};
-        if (!all[cls].cells[name]) all[cls].cells[name] = {};
-        if (!all[cls].cells[name][sub]) all[cls].cells[name][sub] = {};
-        if (!all[cls].cells[name][sub][q]) all[cls].cells[name][sub][q] = {};
-        all[cls].cells[name][sub][q][cellIdx] = isChecked;
+        if (!all[cls].cells[studentKey]) all[cls].cells[studentKey] = {};
+        if (!all[cls].cells[studentKey][sub]) all[cls].cells[studentKey][sub] = {};
+        if (!all[cls].cells[studentKey][sub][q]) all[cls].cells[studentKey][sub][q] = {};
+        all[cls].cells[studentKey][sub][q][cellIdx] = isChecked;
         lsSet('lock_settings', all);
         window.syncLockSettingsToFirebase(all);
         render();
